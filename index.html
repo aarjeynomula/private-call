@@ -38,11 +38,11 @@ import { getDatabase, ref, set, get, onValue, remove, push, update } from "https
 const firebaseConfig = {
   apiKey: "AIzaSyC3helc7-OrBtUWQrTfqvb8AkeAaVtCTDI",
   authDomain: "private-call-app-88d69.firebaseapp.com",
-  databaseURL: "https://PASTE_PROJECT_ID-default-rtdb.firebaseio.com",
-  projectId: "private-call-app-88d69",,
+  projectId: "private-call-app-88d69",
   storageBucket: "private-call-app-88d69.firebasestorage.app",
   messagingSenderId: "920191261154",
   appId: "1:920191261154:web:84816adf90ca4aa32b41bb",
+  measurementId: "G-5T5STCZP7E"
 };
 const $=id=>document.getElementById(id);
 let db,uid,pc,localStream,roomCode,unsubs=[],candidateQueue=[],isCaller=false,muted=false;
