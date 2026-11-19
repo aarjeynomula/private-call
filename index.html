@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>Private Call</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--line:#263650;--muted:#9aabc3;--accent:#38bdf8;--green:#22c55e;--red:#ef4444}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#0b1220,#14243b);font:16px system-ui;color:#eef5ff;min-height:100vh;display:grid;place-items:center;padding:18px}
+main{width:min(100%,480px);background:rgba(18,29,48,.96);border:1px solid var(--line);border-radius:24px;padding:24px;box-shadow:0 24px 70px #0008}
+h1{margin:0;font-size:27px}p{color:var(--muted);line-height:1.5}.tag{display:inline-block;background:#0c3447;color:#7dd3fc;padding:5px 10px;border-radius:20px;font-size:12px;margin:8px 0 16px}
+label{display:block;color:#c7d4e7;font-size:13px;margin:14px 0 6px}input{width:100%;padding:14px;border-radius:12px;border:1px solid var(--line);background:#0b1526;color:white;font-size:17px;outline:none}input:focus{border-color:var(--accent)}
+button{border:0;border-radius:12px;padding:13px 15px;font-weight:650;font-size:15px;cursor:pointer;color:#07111e;background:var(--accent)}button:disabled{opacity:.4;cursor:not-allowed}.row{display:flex;gap:10px;margin-top:12px}.row button{flex:1}.secondary{background:#263650;color:#e8f2ff}.danger{background:var(--red);color:white}.good{background:var(--green);color:#05210f}
+#status{padding:12px;border:1px solid var(--line);border-radius:12px;margin:16px 0;color:#cbd9ec;font-size:14px;min-height:45px}
+#myid{font-size:27px;letter-spacing:5px;font-weight:800;color:#7dd3fc}
+.small{font-size:12px;color:var(--muted)}audio{width:100%;margin-top:12px}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+</style>
+</head>
+<body><main>
+<h1>Private Call</h1><div class="tag">SIM-FREE · WEBRTC VOICE</div>
+<p>Make a private voice call between two phones using Wi-Fi or mobile internet. Both phones must open this page over HTTPS and use the same call code.</p>
+<div class="small">Your call code</div><div id="myid">------</div>
+<label for="room">Shared private call code (6 digits)</label><input id="room" inputmode="numeric" maxlength="6" placeholder="Enter same code on both phones">
+<div class="row"><button id="join">Connect</button><button id="call" class="good" disabled>Call</button></div>
+<div id="status">Not connected. Enter a shared code and tap Connect.</div>
+<div class="row"><button id="answer" class="good" disabled>Answer</button><button id="hang" class="danger" disabled>Hang up</button></div>
+<div class="row"><button id="mute" class="secondary" disabled>Mute microphone</button><button id="speaker" class="secondary" disabled>Speaker</button></div>
+<audio id="remoteAudio" autoplay playsinline></audio>
+<hr><p class="small">Prototype note: this uses Firebase for call signalling and Google's public STUN servers for direct connection. Some networks require a TURN relay for reliable calls. Do not use this prototype for sensitive conversations until you configure and audit access controls.</p>
+</main>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getDatabase, ref, set, get, onValue, remove, push, update } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+// 1) Replace these values with your Firebase project's Web App configuration.
+const firebaseConfig = {
+  apiKey: "AIzaSyC3helc7-OrBtUWQrTfqvb8AkeAaVtCTDI",
+  authDomain: "private-call-app-88d69.firebaseapp.com",
+  databaseURL: "https://PASTE_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId: "private-call-app-88d69",,
+  storageBucket: "private-call-app-88d69.firebasestorage.app",
+  messagingSenderId: "920191261154",
+  appId: "1:920191261154:web:84816adf90ca4aa32b41bb",
+};
+const $=id=>document.getElementById(id);
+let db,uid,pc,localStream,roomCode,unsubs=[],candidateQueue=[],isCaller=false,muted=false;
+const status=t=>$("status").textContent=t;
+const configReady=()=>firebaseConfig.apiKey!=="PASTE_API_KEY" && firebaseConfig.projectId!=="PASTE_PROJECT_ID";
+async function setup(){
+ if(!configReady()) throw new Error("Firebase is not configured yet. Follow SETUP.md and paste your Firebase web config into index.html.");
+ const app=initializeApp(firebaseConfig),auth=getAuth(app);
+ await signInAnonymously(auth); uid=auth.currentUser.uid; db=getDatabase(app);
+}
+async function media(){if(!localStream)localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});return localStream}
+function clean(){unsubs.forEach(f=>f());unsubs=[];if(pc){pc.ontrack=null;pc.onicecandidate=null;pc.close();pc=null}if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}$("remoteAudio").srcObject=null;$("call").disabled=true;$("answer").disabled=true;$("hang").disabled=true;$("mute").disabled=true;$("speaker").disabled=true}
+async function createPeer(){
+ pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}]});
+ const stream=await media();stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+ pc.ontrack=e=>{$("remoteAudio").srcObject=e.streams[0];$("remoteAudio").play().catch(()=>{});status("Connected. You can talk now.")};
+ pc.onconnectionstatechange=()=>{if(pc && ["failed","disconnected","closed"].includes(pc.connectionState))status("Call connection: "+pc.connectionState+". Try hanging up and calling again.")};
+ $("hang").disabled=false;$("mute").disabled=false;$("speaker").disabled=false;
+}
+async function connect(){
+ roomCode=$("room").value.trim();
+ if(!/^\d{6}$/.test(roomCode))throw new Error("Enter a 6-digit shared call code.");
+ await setup();
+ const roomRef=ref(db,"privateRooms/"+roomCode);
+ const snap=await get(roomRef);
+ if(!snap.exists()){await set(roomRef,{createdAt:Date.now(),members:{[uid]:true}})}
+ else {const data=snap.val();if(data.members && Object.keys(data.members).length>=2 && !data.members[uid])throw new Error("This room already has two participants. Choose another code.");await update(roomRef,{["members/"+uid]:true})}
+ $("call").disabled=false;status("Ready. Both phones are connected to call room "+roomCode+". One phone should tap Call.");
+ const incoming=ref(db,`privateRooms/${roomCode}/offer`);
+ unsubs.push(onValue(incoming,async s=>{
+   if(!s.exists()||isCaller||pc)return;
+   const offer=s.val();if(offer.to===uid)return;
+   status("Incoming call. Tap Answer.");$("answer").disabled=false;
+   window.pendingOffer=offer;
+ }));
+}
+async function startCall(){
+ if(!db||!roomCode)throw new Error("Connect first.");
+ isCaller=true;await createPeer();
+ const roomPath=`privateRooms/${roomCode}`;
+ pc.onicecandidate=e=>{if(e.candidate)push(ref(db,roomPath+"/callerCandidates"),e.candidate.toJSON())};
+ const offer=await pc.createOffer();await pc.setLocalDescription(offer);
+ await set(ref(db,roomPath+"/offer"),{type:offer.type,sdp:offer.sdp,from:uid,createdAt:Date.now()});
+ unsubs.push(onValue(ref(db,roomPath+"/answer"),async s=>{if(s.exists()&&pc&& !pc.currentRemoteDescription){const a=s.val();if(a.from!==uid){await pc.setRemoteDescription(new RTCSessionDescription(a));status("Answer received. Connecting…")}}}));
+ unsubs.push(onValue(ref(db,roomPath+"/calleeCandidates"),s=>s.forEach(c=>{if(pc)pc.addIceCandidate(new RTCIceCandidate(c.val())).catch(()=>{})})));
+ status("Calling… waiting for the other phone to answer.");
+}
+async function answerCall(){
+ if(!window.pendingOffer)throw new Error("No incoming call found. Ask the other phone to call again.");
+ isCaller=false;await createPeer();const roomPath=`privateRooms/${roomCode}`;
+ pc.onicecandidate=e=>{if(e.candidate)push(ref(db,roomPath+"/calleeCandidates"),e.candidate.toJSON())};
+ await pc.setRemoteDescription(new RTCSessionDescription({type:window.pendingOffer.type,sdp:window.pendingOffer.sdp}));
+ const answer=await pc.createAnswer();await pc.setLocalDescription(answer);
+ await set(ref(db,roomPath+"/answer"),{type:answer.type,sdp:answer.sdp,from:uid,createdAt:Date.now()});
+ unsubs.push(onValue(ref(db,roomPath+"/callerCandidates"),s=>s.forEach(c=>{if(pc)pc.addIceCandidate(new RTCIceCandidate(c.val())).catch(()=>{})})));
+ $("answer").disabled=true;status("Answer sent. Connecting…");
+}
+async function hangup(){if(db&&roomCode){await remove(ref(db,`privateRooms/${roomCode}/offer`));await remove(ref(db,`privateRooms/${roomCode}/answer`));await remove(ref(db,`privateRooms/${roomCode}/callerCandidates`));await remove(ref(db,`privateRooms/${roomCode}/calleeCandidates`));}clean();isCaller=false;window.pendingOffer=null;status("Call ended. You can connect again.");if(roomCode)$("call").disabled=false}
+$("join").onclick=async()=>{try{await connect()}catch(e){status(e.message)}};
+$("call").onclick=async()=>{try{await startCall()}catch(e){status(e.message)}};
+$("answer").onclick=async()=>{try{await answerCall()}catch(e){status(e.message)}};
+$("hang").onclick=()=>hangup().catch(e=>status(e.message));
+$("mute").onclick=()=>{if(!localStream)return;muted=!muted;localStream.getAudioTracks().forEach(t=>t.enabled=!muted);$("mute").textContent=muted?"Unmute microphone":"Mute microphone"};
+$("speaker").onclick=()=>{const a=$("remoteAudio");a.muted=!a.muted;$("speaker").textContent=a.muted?"Enable speaker audio":"Speaker"};
+$("myid").textContent="ROOM CODE";
+</script></body></html>
